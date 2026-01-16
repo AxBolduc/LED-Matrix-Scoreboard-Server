@@ -1,116 +1,31 @@
 import { DurableObject } from "cloudflare:workers";
 import { Result } from "better-result";
 import {
-  AttachmentDeserializationError,
   WebSocketUpgradeError,
-  InvalidMessageError,
   MessageSendError,
-  BroadcastError,
   SessionNotFoundError,
-  InvalidCommandError,
-  type AppError,
+  DeviceIdRequiredError,
+  InvalidDeviceIdError,
 } from "../errors";
-
-interface SessionData {
-  id: string;
-  deviceId: string;
-}
-
-/**
- * Command message structure sent by clients
- */
-interface CommandMessage {
-  command: string;
-  // Future: add payload for commands that need parameters
-}
-
-/**
- * Response for listDevices command
- */
-interface ListDevicesResponse {
-  command: "listDevices";
-  devices: string[];
-  totalCount: number;
-}
-
-/**
- * Error response sent to clients
- */
-interface ErrorResponse {
-  error: string;
-  message: string;
-}
-
-/**
- * Union type for all command responses
- */
-type CommandResponse = ListDevicesResponse | ErrorResponse;
-
-/**
- * Validate deviceId format
- * Must be 1-255 alphanumeric characters, dashes, or underscores
- */
-function isValidDeviceId(deviceId: string): boolean {
-  return /^[a-zA-Z0-9_-]{1,255}$/.test(deviceId);
-}
+import { SessionManager } from "./session";
+import { CommandHandler, type ErrorResponse } from "./commands";
+import { isValidDeviceId } from "./validation";
 
 export class SocketHandlerDO extends DurableObject<Env> {
-  sessions: Map<WebSocket, SessionData>;
+  private sessionManager: SessionManager;
+  private commandHandler: CommandHandler;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.sessions = new Map();
+
+    // Initialize session manager
+    this.sessionManager = new SessionManager();
+
+    // Initialize command handler with session manager
+    this.commandHandler = new CommandHandler(this.sessionManager);
 
     // Restore sessions from hibernated WebSockets
-    this.ctx.getWebSockets().forEach((ws) => {
-      const result = this.deserializeSessionAttachment(ws);
-      result.match({
-        ok: (attachment) => {
-          this.sessions.set(ws, attachment);
-        },
-        err: (error) => {
-          // Log error but continue - attachment may be missing for new connections
-          console.error(
-            "[SOCKET HANDLER] Failed to restore session:",
-            error.message,
-          );
-        },
-      });
-    });
-  }
-
-  /**
-   * Safely deserialize WebSocket attachment
-   */
-  private deserializeSessionAttachment(
-    ws: WebSocket,
-  ): Result<SessionData, AttachmentDeserializationError> {
-    return Result.try({
-      try: () => {
-        const attachment = ws.deserializeAttachment();
-        if (!attachment || typeof attachment !== "object") {
-          throw new Error("Attachment is missing or invalid");
-        }
-        if (!("id" in attachment) || typeof attachment.id !== "string") {
-          throw new Error("Attachment missing required 'id' field");
-        }
-        if (
-          !("deviceId" in attachment) ||
-          typeof attachment.deviceId !== "string"
-        ) {
-          throw new Error("Attachment missing required 'deviceId' field");
-        }
-        return {
-          id: attachment.id,
-          deviceId: attachment.deviceId,
-        } as SessionData;
-      },
-      catch: (cause) =>
-        new AttachmentDeserializationError({
-          message: "Failed to deserialize WebSocket attachment",
-          cause,
-        }),
-    });
+    this.sessionManager.restoreFromHibernation(this.ctx.getWebSockets());
   }
 
   /**
@@ -133,14 +48,19 @@ export class SocketHandlerDO extends DurableObject<Env> {
     });
   }
 
-  private parseDeviceId(request: Request) {
+  /**
+   * Parse and validate deviceId from request
+   */
+  private parseDeviceId(
+    request: Request,
+  ): Result<string, DeviceIdRequiredError | InvalidDeviceIdError> {
     const url = new URL(request.url);
     const deviceId = url.searchParams.get("deviceId");
 
     if (!deviceId) {
       return Result.err(
         new DeviceIdRequiredError({
-          message: "Missing deviceId parameter",
+          message: "deviceId parameter is required",
         }),
       );
     }
@@ -148,7 +68,8 @@ export class SocketHandlerDO extends DurableObject<Env> {
     if (!isValidDeviceId(deviceId)) {
       return Result.err(
         new InvalidDeviceIdError({
-          message: "Invalid deviceId format",
+          message:
+            "deviceId must be 1-255 alphanumeric characters, dashes, or underscores",
         }),
       );
     }
@@ -174,7 +95,7 @@ export class SocketHandlerDO extends DurableObject<Env> {
         const id = crypto.randomUUID();
         server.serializeAttachment({ id, deviceId });
 
-        this.sessions.set(server, { id, deviceId });
+        this.sessionManager.addSession(server, { id, deviceId });
 
         console.log(
           `[SOCKET HANDLER] New connection established: ${id} (device: ${deviceId})`,
@@ -194,55 +115,13 @@ export class SocketHandlerDO extends DurableObject<Env> {
   }
 
   /**
-   * Validate incoming message and parse as command
-   */
-  private validateMessage(
-    message: string | ArrayBuffer,
-  ): Result<CommandMessage, InvalidMessageError> {
-    return Result.try({
-      try: () => {
-        // Convert ArrayBuffer to string if needed
-        const messageStr =
-          typeof message === "string"
-            ? message
-            : new TextDecoder().decode(message);
-
-        // Basic validation - ensure message is not empty
-        if (messageStr.trim().length === 0) {
-          throw new Error("Message is empty");
-        }
-
-        // Parse as JSON
-        const parsed = JSON.parse(messageStr);
-
-        // Validate command structure
-        if (!parsed || typeof parsed !== "object") {
-          throw new Error("Message must be a JSON object");
-        }
-
-        if (!("command" in parsed) || typeof parsed.command !== "string") {
-          throw new Error("Message must have a 'command' string property");
-        }
-
-        return parsed as CommandMessage;
-      },
-      catch: (cause) =>
-        new InvalidMessageError({
-          message: "Invalid message format",
-          receivedMessage: message,
-          reason: cause instanceof Error ? cause.message : String(cause),
-        }),
-    });
-  }
-
-  /**
    * Send message to specific WebSocket with error handling
    */
   private sendMessage(
     ws: WebSocket,
     message: string,
   ): Result<void, MessageSendError | SessionNotFoundError> {
-    const session = this.sessions.get(ws);
+    const session = this.sessionManager.getSession(ws);
     if (!session) {
       return Result.err(
         new SessionNotFoundError({
@@ -265,101 +144,13 @@ export class SocketHandlerDO extends DurableObject<Env> {
   }
 
   /**
-   * Handle command routing
-   */
-  private handleCommand(
-    ws: WebSocket,
-    command: CommandMessage,
-  ): Result<CommandResponse, InvalidCommandError> {
-    return Result.try({
-      try: () => {
-        switch (command.command) {
-          case "listDevices":
-            return this.handleListDevicesCommand();
-
-          default:
-            throw new Error(`Unknown command: ${command.command}`);
-        }
-      },
-      catch: (cause) =>
-        new InvalidCommandError({
-          message: cause instanceof Error ? cause.message : "Invalid command",
-          receivedCommand: command.command,
-          availableCommands: ["listDevices"], // Update as you add commands
-        }),
-    });
-  }
-
-  /**
-   * Handle listDevices command - returns all active deviceIds
-   */
-  private handleListDevicesCommand(): ListDevicesResponse {
-    // Collect all deviceIds from active sessions
-    const devices = Array.from(this.sessions.values()).map(
-      (session) => session.deviceId,
-    );
-
-    return {
-      command: "listDevices",
-      devices,
-      totalCount: devices.length,
-    };
-  }
-
-  /**
-   * Broadcast message to all connected clients
-   */
-  private broadcastMessage(
-    message: string,
-    excludeWs?: WebSocket,
-  ): Result<{ successCount: number; failedCount: number }, BroadcastError> {
-    let successCount = 0;
-    let failedCount = 0;
-    const errors: AppError[] = [];
-
-    for (const [ws, session] of this.sessions.entries()) {
-      if (ws === excludeWs) continue;
-
-      const result = this.sendMessage(ws, message);
-      result.match({
-        ok: () => {
-          successCount++;
-        },
-        err: (error) => {
-          failedCount++;
-          errors.push(error);
-          console.error(
-            `[SOCKET HANDLER] Failed to send to ${session.id}:`,
-            error.message,
-          );
-        },
-      });
-    }
-
-    if (failedCount > 0 && successCount === 0) {
-      // Complete failure
-      return Result.err(
-        new BroadcastError({
-          message: "Failed to broadcast message to any clients",
-          failedCount,
-          totalCount: this.sessions.size,
-          cause: errors,
-        }),
-      );
-    }
-
-    // Partial or complete success
-    return Result.ok({ successCount, failedCount });
-  }
-
-  /**
    * Handle incoming WebSocket message
    */
   async webSocketMessage(
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
-    const session = this.sessions.get(ws);
+    const session = this.sessionManager.getSession(ws);
     const sessionId = session?.id || "unknown";
     const deviceId = session?.deviceId || "unknown";
 
@@ -368,18 +159,10 @@ export class SocketHandlerDO extends DurableObject<Env> {
       message,
     );
 
-    // Validate and parse message as command
-    const validationResult = this.validateMessage(message);
-
-    const processResult = validationResult.andThen((command) => {
-      // Handle the command
-      const commandResult = this.handleCommand(ws, command);
-
-      return commandResult.andThen((response) => {
-        // Send response back to the requester
-        return this.sendMessage(ws, JSON.stringify(response));
-      });
-    });
+    const processResult = this.commandHandler
+      .validateMessage(message)
+      .andThen((command) => this.commandHandler.routeCommand(command))
+      .andThen((response) => this.sendMessage(ws, JSON.stringify(response)));
 
     // Handle final result
     processResult.match({
@@ -392,10 +175,7 @@ export class SocketHandlerDO extends DurableObject<Env> {
         console.error(`[SOCKET HANDLER] Error processing command:`, error);
 
         // Send error response back to client
-        const errorResponse: ErrorResponse = {
-          error: error._tag,
-          message: error.message,
-        };
+        const errorResponse = this.commandHandler.createErrorResponse(error);
 
         this.sendMessage(ws, JSON.stringify(errorResponse));
       },
@@ -411,14 +191,14 @@ export class SocketHandlerDO extends DurableObject<Env> {
     reason: string,
     wasClean: boolean,
   ): Promise<void> {
-    const session = this.sessions.get(ws);
+    const session = this.sessionManager.getSession(ws);
     const sessionId = session?.id || "unknown";
 
     console.log(
       `[SOCKET HANDLER] Connection closed: ${sessionId} (code: ${code}, clean: ${wasClean})`,
     );
 
-    this.sessions.delete(ws);
+    this.sessionManager.removeSession(ws);
 
     // Attempt to close with proper reason, wrapped in Result
     Result.try({
