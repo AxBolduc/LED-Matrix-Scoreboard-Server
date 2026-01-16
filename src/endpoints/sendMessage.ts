@@ -142,10 +142,10 @@ export class SendMessage extends OpenAPIRoute {
     const messageJson = JSON.stringify({ command, data });
 
     // Call Durable Object RPC method
-    const result = Result.try({
-      try: () => {
+    const result = await Result.tryPromise({
+      try: async () => {
         const stub = c.env.SOCKET_HANDLER.getByName("socketHandler");
-        return stub.sendMessageToDevice(deviceId, messageJson);
+        return await stub.sendMessageToDevice(deviceId, messageJson);
       },
       catch: (cause) => ({
         _tag: "RPC_ERROR",
@@ -156,10 +156,10 @@ export class SendMessage extends OpenAPIRoute {
 
     // Handle the result
     return result.match({
-      ok: () => {
+      ok: (wasMessageSent) => {
         return Response.json(
           {
-            success: true,
+            success: wasMessageSent,
             message: "Message sent",
           },
           {

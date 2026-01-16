@@ -224,6 +224,29 @@ export class SocketHandlerDO extends DurableObject<Env> {
   }
 
   /**
+   * Handle WebSocket error
+   * This is called when a WebSocket connection encounters an error,
+   * including abnormal terminations like network failures or device crashes
+   */
+  async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    const session = this.sessionManager.getSession(ws);
+    const sessionId = session?.id || "unknown";
+    const deviceId = session?.deviceId || "unknown";
+
+    console.error(
+      `[SOCKET HANDLER] WebSocket error for ${sessionId} (device: ${deviceId}):`,
+      error,
+    );
+
+    // Clean up the session
+    this.sessionManager.removeSession(ws);
+
+    console.log(
+      `[SOCKET HANDLER] Session ${sessionId} cleaned up after error`,
+    );
+  }
+
+  /**
    * Get all active device IDs (RPC method)
    * Can be called directly from worker via RPC
    */
