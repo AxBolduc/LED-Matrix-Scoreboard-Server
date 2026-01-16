@@ -6,6 +6,7 @@ import {
   SessionNotFoundError,
   DeviceIdRequiredError,
   InvalidDeviceIdError,
+  DeviceNotFoundError,
 } from "../errors";
 import { SessionManager } from "./session";
 import { CommandHandler, type ErrorResponse } from "./commands";
@@ -228,5 +229,26 @@ export class SocketHandlerDO extends DurableObject<Env> {
    */
   getDevices(): string[] {
     return this.sessionManager.getAllDeviceIds();
+  }
+
+  /**
+   * Send message to a specific device by deviceId (RPC method)
+   * Can be called directly from worker via RPC
+   *
+   * @returns boolean because the RPC return value has to be serializable
+   */
+  sendMessageToDevice(deviceId: string, message: string): boolean {
+    // Look up WebSocket by deviceId
+    const ws = this.sessionManager.getWebSocketByDeviceId(deviceId);
+
+    if (!ws) {
+      return false;
+    }
+
+    // Use existing sendMessage method
+    return this.sendMessage(ws, message).match({
+      ok: () => true,
+      err: () => false,
+    });
   }
 }

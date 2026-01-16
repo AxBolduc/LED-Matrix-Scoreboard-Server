@@ -71,6 +71,14 @@ export class BroadcastError extends TaggedError("BroadcastError")<{
 }>() {}
 
 /**
+ * Device not found - no active connection for given deviceId
+ */
+export class DeviceNotFoundError extends TaggedError("DeviceNotFoundError")<{
+  message: string;
+  deviceId: string;
+}>() {}
+
+/**
  * Invalid or unknown command received from client
  */
 export class InvalidCommandError extends TaggedError("InvalidCommandError")<{
@@ -90,6 +98,7 @@ export type AppError =
   | MessageSendError
   | BroadcastError
   | InvalidCommandError
+  | DeviceNotFoundError
   | UnhandledException
   | DeviceIdRequiredError
   | InvalidDeviceIdError;

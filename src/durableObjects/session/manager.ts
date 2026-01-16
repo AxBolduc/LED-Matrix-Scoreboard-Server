@@ -6,9 +6,11 @@ import { deserializeSessionAttachment } from "./serialization";
  */
 export class SessionManager {
   private sessions: Map<WebSocket, SessionData>;
+  private deviceToWebSocket: Map<string, WebSocket>;
 
   constructor() {
     this.sessions = new Map();
+    this.deviceToWebSocket = new Map();
   }
 
   /**
@@ -20,6 +22,7 @@ export class SessionManager {
       result.match({
         ok: (sessionData) => {
           this.sessions.set(ws, sessionData);
+          this.deviceToWebSocket.set(sessionData.deviceId, ws);
         },
         err: (error) => {
           console.error(
@@ -36,6 +39,7 @@ export class SessionManager {
    */
   addSession(ws: WebSocket, sessionData: SessionData): void {
     this.sessions.set(ws, sessionData);
+    this.deviceToWebSocket.set(sessionData.deviceId, ws);
   }
 
   /**
@@ -49,6 +53,10 @@ export class SessionManager {
    * Remove a session
    */
   removeSession(ws: WebSocket): boolean {
+    const session = this.sessions.get(ws);
+    if (session) {
+      this.deviceToWebSocket.delete(session.deviceId);
+    }
     return this.sessions.delete(ws);
   }
 
@@ -71,5 +79,12 @@ export class SessionManager {
    */
   getAllSessions(): Map<WebSocket, SessionData> {
     return this.sessions;
+  }
+
+  /**
+   * Get WebSocket by deviceId
+   */
+  getWebSocketByDeviceId(deviceId: string): WebSocket | undefined {
+    return this.deviceToWebSocket.get(deviceId);
   }
 }
