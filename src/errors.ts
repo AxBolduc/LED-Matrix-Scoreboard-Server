@@ -71,6 +71,15 @@ export class BroadcastError extends TaggedError("BroadcastError")<{
 }>() {}
 
 /**
+ * Invalid or unknown command received from client
+ */
+export class InvalidCommandError extends TaggedError("InvalidCommandError")<{
+  message: string;
+  receivedCommand: string;
+  availableCommands: string[];
+}>() {}
+
+/**
  * Union type of all possible errors in the application
  */
 export type AppError =
@@ -80,6 +89,7 @@ export type AppError =
   | SessionNotFoundError
   | MessageSendError
   | BroadcastError
+  | InvalidCommandError
   | UnhandledException
   | DeviceIdRequiredError
   | InvalidDeviceIdError;

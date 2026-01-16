@@ -7,15 +7,44 @@ import {
   MessageSendError,
   BroadcastError,
   SessionNotFoundError,
+  InvalidCommandError,
   type AppError,
-  DeviceIdRequiredError,
-  InvalidDeviceIdError,
 } from "../errors";
 
 interface SessionData {
   id: string;
   deviceId: string;
 }
+
+/**
+ * Command message structure sent by clients
+ */
+interface CommandMessage {
+  command: string;
+  // Future: add payload for commands that need parameters
+}
+
+/**
+ * Response for listDevices command
+ */
+interface ListDevicesResponse {
+  command: "listDevices";
+  devices: string[];
+  totalCount: number;
+}
+
+/**
+ * Error response sent to clients
+ */
+interface ErrorResponse {
+  error: string;
+  message: string;
+}
+
+/**
+ * Union type for all command responses
+ */
+type CommandResponse = ListDevicesResponse | ErrorResponse;
 
 /**
  * Validate deviceId format
@@ -165,11 +194,11 @@ export class SocketHandlerDO extends DurableObject<Env> {
   }
 
   /**
-   * Validate incoming message
+   * Validate incoming message and parse as command
    */
   private validateMessage(
     message: string | ArrayBuffer,
-  ): Result<string, InvalidMessageError> {
+  ): Result<CommandMessage, InvalidMessageError> {
     return Result.try({
       try: () => {
         // Convert ArrayBuffer to string if needed
@@ -183,10 +212,19 @@ export class SocketHandlerDO extends DurableObject<Env> {
           throw new Error("Message is empty");
         }
 
-        // Optional: Add JSON validation if you expect JSON messages
-        // JSON.parse(messageStr);
+        // Parse as JSON
+        const parsed = JSON.parse(messageStr);
 
-        return messageStr;
+        // Validate command structure
+        if (!parsed || typeof parsed !== "object") {
+          throw new Error("Message must be a JSON object");
+        }
+
+        if (!("command" in parsed) || typeof parsed.command !== "string") {
+          throw new Error("Message must have a 'command' string property");
+        }
+
+        return parsed as CommandMessage;
       },
       catch: (cause) =>
         new InvalidMessageError({
@@ -224,6 +262,48 @@ export class SocketHandlerDO extends DurableObject<Env> {
           cause,
         }),
     });
+  }
+
+  /**
+   * Handle command routing
+   */
+  private handleCommand(
+    ws: WebSocket,
+    command: CommandMessage,
+  ): Result<CommandResponse, InvalidCommandError> {
+    return Result.try({
+      try: () => {
+        switch (command.command) {
+          case "listDevices":
+            return this.handleListDevicesCommand();
+
+          default:
+            throw new Error(`Unknown command: ${command.command}`);
+        }
+      },
+      catch: (cause) =>
+        new InvalidCommandError({
+          message: cause instanceof Error ? cause.message : "Invalid command",
+          receivedCommand: command.command,
+          availableCommands: ["listDevices"], // Update as you add commands
+        }),
+    });
+  }
+
+  /**
+   * Handle listDevices command - returns all active deviceIds
+   */
+  private handleListDevicesCommand(): ListDevicesResponse {
+    // Collect all deviceIds from active sessions
+    const devices = Array.from(this.sessions.values()).map(
+      (session) => session.deviceId,
+    );
+
+    return {
+      command: "listDevices",
+      devices,
+      totalCount: devices.length,
+    };
   }
 
   /**
@@ -281,46 +361,43 @@ export class SocketHandlerDO extends DurableObject<Env> {
   ): Promise<void> {
     const session = this.sessions.get(ws);
     const sessionId = session?.id || "unknown";
+    const deviceId = session?.deviceId || "unknown";
 
     console.log(
-      `[SOCKET HANDLER] Received message from ${sessionId}:`,
+      `[SOCKET HANDLER] Received message from ${sessionId} (device: ${deviceId}):`,
       message,
     );
 
-    // Validate message using Result
+    // Validate and parse message as command
     const validationResult = this.validateMessage(message);
 
-    const processResult = validationResult.andThen((validMessage) => {
-      // Echo back to sender
-      const sendResult = this.sendMessage(
-        ws,
-        `[Device: ${session.deviceId}] Echo: ${validMessage}`,
-      );
+    const processResult = validationResult.andThen((command) => {
+      // Handle the command
+      const commandResult = this.handleCommand(ws, command);
 
-      // Broadcast to other clients
-      const broadcastResult = this.broadcastMessage(
-        `${sessionId} said: ${validMessage}`,
-        ws, // exclude sender
-      );
-
-      // Combine results
-      return sendResult.andThen(() => broadcastResult);
+      return commandResult.andThen((response) => {
+        // Send response back to the requester
+        return this.sendMessage(ws, JSON.stringify(response));
+      });
     });
 
     // Handle final result
     processResult.match({
-      ok: (stats) => {
+      ok: () => {
         console.log(
-          `[SOCKET HANDLER] Message processed successfully. Broadcast: ${stats.successCount} success, ${stats.failedCount} failed`,
+          `[SOCKET HANDLER] Command processed successfully for ${deviceId}`,
         );
       },
       err: (error) => {
-        console.error(`[SOCKET HANDLER] Error processing message:`, error);
-        // Attempt to send error message back to client
-        this.sendMessage(
-          ws,
-          JSON.stringify({ error: error._tag, message: error.message }),
-        );
+        console.error(`[SOCKET HANDLER] Error processing command:`, error);
+
+        // Send error response back to client
+        const errorResponse: ErrorResponse = {
+          error: error._tag,
+          message: error.message,
+        };
+
+        this.sendMessage(ws, JSON.stringify(errorResponse));
       },
     });
   }
