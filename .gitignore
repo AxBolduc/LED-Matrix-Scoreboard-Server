@@ -165,3 +165,6 @@ dist
 .env*
 !.env.example
 .wrangler/
+
+# opensrc - source code for packages
+opensrc/
