@@ -8,10 +8,21 @@ import {
   BroadcastError,
   SessionNotFoundError,
   type AppError,
+  DeviceIdRequiredError,
+  InvalidDeviceIdError,
 } from "../errors";
 
 interface SessionData {
   id: string;
+  deviceId: string;
+}
+
+/**
+ * Validate deviceId format
+ * Must be 1-255 alphanumeric characters, dashes, or underscores
+ */
+function isValidDeviceId(deviceId: string): boolean {
+  return /^[a-zA-Z0-9_-]{1,255}$/.test(deviceId);
 }
 
 export class SocketHandlerDO extends DurableObject<Env> {
@@ -54,7 +65,16 @@ export class SocketHandlerDO extends DurableObject<Env> {
         if (!("id" in attachment) || typeof attachment.id !== "string") {
           throw new Error("Attachment missing required 'id' field");
         }
-        return { id: attachment.id } as SessionData;
+        if (
+          !("deviceId" in attachment) ||
+          typeof attachment.deviceId !== "string"
+        ) {
+          throw new Error("Attachment missing required 'deviceId' field");
+        }
+        return {
+          id: attachment.id,
+          deviceId: attachment.deviceId,
+        } as SessionData;
       },
       catch: (cause) =>
         new AttachmentDeserializationError({
@@ -68,7 +88,9 @@ export class SocketHandlerDO extends DurableObject<Env> {
    * Handle WebSocket upgrade request
    */
   async fetch(request: Request): Promise<Response> {
-    const result = this.handleWebSocketUpgrade(request);
+    const result = this.parseDeviceId(request).andThen((deviceId) =>
+      this.handleWebSocketUpgrade(deviceId),
+    );
 
     return result.match({
       ok: (response) => response,
@@ -82,11 +104,34 @@ export class SocketHandlerDO extends DurableObject<Env> {
     });
   }
 
+  private parseDeviceId(request: Request) {
+    const url = new URL(request.url);
+    const deviceId = url.searchParams.get("deviceId");
+
+    if (!deviceId) {
+      return Result.err(
+        new DeviceIdRequiredError({
+          message: "Missing deviceId parameter",
+        }),
+      );
+    }
+
+    if (!isValidDeviceId(deviceId)) {
+      return Result.err(
+        new InvalidDeviceIdError({
+          message: "Invalid deviceId format",
+        }),
+      );
+    }
+
+    return Result.ok(deviceId);
+  }
+
   /**
    * Create WebSocket connection with Result type
    */
   private handleWebSocketUpgrade(
-    request: Request,
+    deviceId: string,
   ): Result<Response, WebSocketUpgradeError> {
     return Result.try({
       try: () => {
@@ -98,11 +143,13 @@ export class SocketHandlerDO extends DurableObject<Env> {
 
         // Generate session ID and attach to WebSocket
         const id = crypto.randomUUID();
-        server.serializeAttachment({ id });
+        server.serializeAttachment({ id, deviceId });
 
-        this.sessions.set(server, { id });
+        this.sessions.set(server, { id, deviceId });
 
-        console.log(`[SOCKET HANDLER] New connection established: ${id}`);
+        console.log(
+          `[SOCKET HANDLER] New connection established: ${id} (device: ${deviceId})`,
+        );
 
         return new Response(null, {
           status: 101,
@@ -245,7 +292,10 @@ export class SocketHandlerDO extends DurableObject<Env> {
 
     const processResult = validationResult.andThen((validMessage) => {
       // Echo back to sender
-      const sendResult = this.sendMessage(ws, `Echo: ${validMessage}`);
+      const sendResult = this.sendMessage(
+        ws,
+        `[Device: ${session.deviceId}] Echo: ${validMessage}`,
+      );
 
       // Broadcast to other clients
       const broadcastResult = this.broadcastMessage(

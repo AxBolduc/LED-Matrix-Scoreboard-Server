@@ -3,7 +3,24 @@ import { TaggedError, UnhandledException } from "better-result";
 /**
  * WebSocket connection upgrade failed
  */
-export class WebSocketUpgradeError extends TaggedError("WebSocketUpgradeError")<{
+export class WebSocketUpgradeError extends TaggedError(
+  "WebSocketUpgradeError",
+)<{
+  message: string;
+  cause?: unknown;
+}>() {}
+
+/**
+ * No Device ID provided on WebSocket upgrade request
+ */
+export class DeviceIdRequiredError extends TaggedError(
+  "DeviceIdRequiredError",
+)<{ message: string; cause?: unknown }>() {}
+
+/**
+ * Invalid Device ID format provided on WebSocket upgrade request
+ */
+export class InvalidDeviceIdError extends TaggedError("InvalidDeviceIdError")<{
   message: string;
   cause?: unknown;
 }>() {}
@@ -20,7 +37,9 @@ export class InvalidMessageError extends TaggedError("InvalidMessageError")<{
 /**
  * Failed to deserialize WebSocket attachment (session data)
  */
-export class AttachmentDeserializationError extends TaggedError("AttachmentDeserializationError")<{
+export class AttachmentDeserializationError extends TaggedError(
+  "AttachmentDeserializationError",
+)<{
   message: string;
   cause?: unknown;
 }>() {}
@@ -61,4 +80,6 @@ export type AppError =
   | SessionNotFoundError
   | MessageSendError
   | BroadcastError
-  | UnhandledException;
+  | UnhandledException
+  | DeviceIdRequiredError
+  | InvalidDeviceIdError;
