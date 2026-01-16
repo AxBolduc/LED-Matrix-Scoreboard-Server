@@ -221,4 +221,12 @@ export class SocketHandlerDO extends DurableObject<Env> {
       },
     });
   }
+
+  /**
+   * Get all active device IDs (RPC method)
+   * Can be called directly from worker via RPC
+   */
+  getDevices(): string[] {
+    return this.sessionManager.getAllDeviceIds();
+  }
 }

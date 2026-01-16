@@ -1,6 +1,7 @@
 import { fromHono } from "chanfana";
 import { Hono } from "hono";
 import { WebsocketConnect } from "./endpoints/websocket";
+import { DevicesList } from "./endpoints/devices";
 import { SocketHandlerDO } from "./durableObjects/socketHandler";
 
 // Start a Hono app
@@ -13,6 +14,7 @@ const openapi = fromHono(app, {
 
 // Register OpenAPI endpoints
 openapi.get("/ws", WebsocketConnect);
+openapi.get("/devices", DevicesList);
 
 // Export the Hono app
 export default app;
