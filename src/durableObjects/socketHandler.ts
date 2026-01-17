@@ -6,7 +6,6 @@ import {
   SessionNotFoundError,
   DeviceIdRequiredError,
   InvalidDeviceIdError,
-  DeviceNotFoundError,
 } from "../errors";
 import { SessionManager } from "./session";
 import { CommandHandler, type ErrorResponse } from "./commands";
@@ -241,9 +240,7 @@ export class SocketHandlerDO extends DurableObject<Env> {
     // Clean up the session
     this.sessionManager.removeSession(ws);
 
-    console.log(
-      `[SOCKET HANDLER] Session ${sessionId} cleaned up after error`,
-    );
+    console.log(`[SOCKET HANDLER] Session ${sessionId} cleaned up after error`);
   }
 
   /**

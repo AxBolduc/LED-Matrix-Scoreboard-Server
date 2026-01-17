@@ -21,8 +21,7 @@ export class SessionManager {
       const result = deserializeSessionAttachment(ws);
       result.match({
         ok: (sessionData) => {
-          this.sessions.set(ws, sessionData);
-          this.deviceToWebSocket.set(sessionData.deviceId, ws);
+          this.addSession(ws, sessionData);
         },
         err: (error) => {
           console.error(
@@ -53,10 +52,7 @@ export class SessionManager {
       try {
         existingWs.close(1000, "Device reconnected");
       } catch (error) {
-        console.error(
-          "[SESSION MANAGER] Error closing old WebSocket:",
-          error,
-        );
+        console.error("[SESSION MANAGER] Error closing old WebSocket:", error);
       }
     }
 
@@ -104,7 +100,7 @@ export class SessionManager {
    * Get all active deviceIds
    */
   getAllDeviceIds(): string[] {
-    return Array.from(this.sessions.values()).map((s) => s.deviceId);
+    return Array.from(this.deviceToWebSocket.keys());
   }
 
   /**
