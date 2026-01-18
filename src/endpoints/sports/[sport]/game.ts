@@ -72,7 +72,7 @@ export class GetGameRoute extends OpenAPIRoute {
             return new Response(
               JSON.stringify({
                 error: "ApiResponseParsingError",
-                message: error.message,
+                message: error.cause,
               }),
               {
                 status: 500,

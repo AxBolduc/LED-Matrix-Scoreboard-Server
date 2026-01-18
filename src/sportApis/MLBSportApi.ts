@@ -120,10 +120,15 @@ export class MLBSportApi extends AbstractSportApiClient {
           message: "Failed to parse game data",
         }),
     }).andThen((parsedData) => {
-      const gameForTeam = this.findGameForTeam(
-        parsedData.dates[0].games,
-        teamAbr,
-      );
+      const todayGames = parsedData.dates[0]?.games;
+
+      if (!todayGames) {
+        return Result.err(
+          new NoGamesFoundError({ message: "No games for team" }),
+        );
+      }
+
+      const gameForTeam = this.findGameForTeam(todayGames, teamAbr);
 
       if (!gameForTeam) {
         console.error("[MLB API] Error finding game for team:", gameForTeam);
@@ -162,6 +167,7 @@ export class MLBSportApi extends AbstractSportApiClient {
   ): Game {
     return {
       sport: "mlb",
+      gameId: "123",
       status: game.status.statusCode === "F" ? "FINAL" : "LIVE",
       teams: {
         away: {

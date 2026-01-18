@@ -1,5 +1,6 @@
 import { AbstractSportApiClient } from "./AbstractSportApiClient";
 import { MLBSportApi } from "./MLBSportApi";
+import { NHLSportApi } from "./NHLSportApi";
 
 export class SportApiFactory {
   public static create(sport: string): AbstractSportApiClient {
@@ -7,8 +8,7 @@ export class SportApiFactory {
       case "mlb":
         return new MLBSportApi();
       case "nhl":
-      // TODO: Implement
-      // return new NHLSportApi();
+        return new NHLSportApi();
       default:
         throw new Error(`Unsupported sport: ${sport}`);
     }
